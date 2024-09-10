@@ -1,0 +1,23 @@
+function w $print_str(l %buf, l %len) {
+@start
+  %ret =w call $syscall3(w 1, w 1, l %buf, l %len)
+  ret %ret
+}
+
+function $exit(w %code) {
+@start
+  call $syscall1(w 60, w %code)
+  ret
+}
+
+export
+function w $_start() {
+@start
+  %a =l copy 34
+  %b =l copy 35
+  %c =l add %a, %b
+
+  call $print_i64(l %c, w 1)
+  call $exit(w 0)
+  ret
+}
