@@ -8,7 +8,7 @@ use std::str::Lines;
 use std::fmt::Display;
 use std::iter::{Peekable, Enumerate};
 
-pub type Tokens<'a> = Vec::<Token<'a>>;
+pub type Tokens<'a> = Vec::<Box::<Token<'a>>>;
 pub type Tokens2D<'a> = Vec::<Tokens<'a>>;
 pub type IoResultRef<'a, T> = Result<T, &'a std::io::Error>;
 type LinesIterator<'a> = Peekable::<Enumerate::<Lines<'a>>>;
@@ -42,10 +42,11 @@ impl Loc {
 
 #[derive(Debug, Clone)]
 pub enum TokenKind {
+    Int,
+    Lit,
     Type,
+    Plus,
     Equal,
-    Integer,
-    Literal,
     Semicolon,
 }
 
@@ -125,13 +126,14 @@ impl<'a> Lexer<'a> {
     fn token_kind(&self, string: &str) -> TokenKind {
         let first = string.as_bytes()[0];
         match first as _ {
+            '+' => TokenKind::Plus,
             '=' => TokenKind::Equal,
             ';' => TokenKind::Semicolon,
-            '0'..='9' => TokenKind::Integer,
+            '0'..='9' => TokenKind::Int,
             'a'..='z' | 'A'..='Z' => if Self::TYPES.contains(&string) {
                 TokenKind::Type
             } else {
-                TokenKind::Literal
+                TokenKind::Lit
             }
             _ => panic!("{loc} error: unexpected token: {string}", loc = last_loc_to_string!(self.ctx))
         }
@@ -154,7 +156,7 @@ impl<'a> Lexer<'a> {
                 string,
                 loc_id: append_loc!(self.ctx, loc),
             };
-            tokens.push(token);
+            tokens.push(Box::new(token));
             tokens
         });
         self.tokens.push(tokens);

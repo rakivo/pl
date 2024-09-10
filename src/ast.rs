@@ -1,14 +1,21 @@
 use crate::lexer::Token;
 
-#[repr(u8)]
 #[derive(Debug)]
-pub enum Value {
-    I32(i32) = 4,
+pub enum OpKind<'a> {
+    Sum(Box::<Expr<'a>>, Box::<Expr<'a>>)
+}
+
+#[derive(Debug)]
+pub enum Expr<'a> {
+    Op(OpKind<'a>),
+    Expr(Box::<Expr<'a>>),
+    Int(Box::<Token<'a>>),
+    Lit(Box::<Token<'a>>)
 }
 
 #[derive(Debug)]
 pub struct VarDecl<'a> {
-    pub v: Value,
+    pub value: Expr<'a>,
     pub name_token: Box::<Token<'a>>,
 }
 
@@ -22,5 +29,5 @@ pub struct Ast<'a> {
     pub loc_id: usize,
     pub ast_id: usize,
     pub next_id: usize,
-    pub ast_kind: AstKind<'a>
+    pub kind: AstKind<'a>
 }

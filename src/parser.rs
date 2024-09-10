@@ -5,9 +5,10 @@ use crate::{
     locid_to_string,
     ast::{
         Ast,
-        Value,
+        Expr,
+        OpKind,
         AstKind,
-        VarDecl
+        VarDecl,
     },
     lexer::{
         Token,
@@ -24,6 +25,12 @@ pub struct Parser<'a> {
     curr_line: Tokens<'a>,
 }
 
+enum Item<'a> {
+    Expr(Expr<'a>),
+    Int(Box::<Token<'a>>),
+    Lit(Box::<Token<'a>>),
+}
+
 impl<'a> Parser<'a> {
     #[inline(always)]
     pub fn new(ctx: &'a RefCtx<'a>, dummy: Tokens<'a>) -> Self {
@@ -33,27 +40,71 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn type_check_token<F, E>(&self, idx: usize, cond: F, err: E) -> Box::<Token<'a>>
+    #[inline]
+    fn type_check_token<F, E>(&self, idx: usize, cond: F, err: E) -> &Token<'a>
+    where
+        F: FnOnce(&Token) -> bool,
+        E: FnOnce((&'a str, usize))
+    {
+        if let Some(t) = self.curr_line.get(idx) {
+            if cond(t) { t } else { err((t.string, t.loc_id)); exit(1) }
+        } else { err(("<eof>", self.curr_line[idx].loc_id)); exit(1) }
+    }
+
+    #[inline]
+    fn type_check_token_owned<F, E>(&self, idx: usize, cond: F, err: E) -> Box::<Token<'a>>
     where
         F: FnOnce(&Token) -> bool,
         E: FnOnce((&'a str, usize))
     {
         if let Some(t) = self.curr_line.get(idx) {
             if cond(t) {
-                Box::new(self.curr_line[idx])
-            } else {
-                err((t.string, t.loc_id)); exit(1)
-            }
+                self.curr_line[idx].to_owned()
+            } else { err((t.string, t.loc_id)); exit(1) }
         } else { err(("<eof>", self.curr_line[idx].loc_id)); exit(1) }
     }
 
-    fn parse_decl(&self, idx: &mut usize) -> VarDecl<'a> {
-        let ref ty_token = self.curr_line[*idx];
+    fn parse_expr(&self, tokens: Vec::<&Box::<Token::<'a>>>) -> Expr<'a> {
+        fn parse_term<'a>(token: &Box::<Token<'a>>) -> Expr<'a> {
+            match token.kind {
+                TokenKind::Int => Expr::Int(token.to_owned()),
+                TokenKind::Lit => Expr::Lit(token.to_owned()),
+                _ => panic!("Expected a term, found: {:?}", token.kind),
+            }
+        }
 
+        fn parse_sum<'a>(ctx: &RefCtx, tokens: Vec::<&Box::<Token<'a>>>, mut i: usize) -> (Expr<'a>, usize) {
+            let mut expr = parse_term(&tokens[i]);
+            i += 1;
+
+            while i < tokens.len() {
+                let token = &tokens[i];
+                match token.kind {
+                    TokenKind::Plus => {
+                        i += 1;
+                        if i >= tokens.len() {
+                            panic!("{l} error: unexpected <eof> after `+`",
+                                   l = locid_to_string!(ctx, token.loc_id));
+                        }
+                        let rhs = parse_term(&tokens[i]);
+                        expr = Expr::Op(OpKind::Sum(Box::new(expr), Box::new(rhs)));
+                    }
+                    _ => break
+                }
+                i += 1;
+            }
+
+            (expr, i)
+        }
+
+        parse_sum(&self.ctx, tokens, 0).0
+    }
+
+    fn parse_decl(&self, idx: &mut usize) -> VarDecl<'a> {
         *idx += 1;
 
-        let name_token = self.type_check_token(*idx, |t| {
-            matches!(t.kind, TokenKind::Literal)
+        let name_token = self.type_check_token_owned(*idx, |t| {
+            matches!(t.kind, TokenKind::Lit)
         }, |(string, loc_id)| {
             panic!("{l} error: expected literal after the type, but got: {string}",
                    l = locid_to_string!(self.ctx, loc_id))
@@ -61,7 +112,7 @@ impl<'a> Parser<'a> {
 
         *idx += 1;
 
-        let _ = self.type_check_token(*idx, |t| {
+        let eq_token = self.type_check_token(*idx, |t| {
             matches!(t.kind, TokenKind::Equal)
         }, |(string, loc_id)| {
             panic!("{l} error: expected equal after the name, but got: {string}",
@@ -70,26 +121,18 @@ impl<'a> Parser<'a> {
 
         *idx += 1;
 
-        let v_token = self.type_check_token(*idx, |t| {
-            matches!(t.kind, TokenKind::Integer)
-        }, |(string, loc_id)| {
-            panic!("{l} error: expected integer after the equal, but got: {string}",
-                   l = locid_to_string!(self.ctx, loc_id))
-        });
+        if *idx > self.curr_line.len() {
+            let s = self.curr_line.get(1).map(|t| t.string).unwrap_or("<eof>");
+            panic!("{l} error: expected expr after the equal sign, but got: {s}",
+                   l = locid_to_string!(self.ctx, eq_token.loc_id))
+        }
 
-        let v = match ty_token.string {
-            "i32" => {
-                let int = v_token.string.parse::<i32>()
-                    .expect("failed to parse to integer bruv");
+        let expr_tokens = self.curr_line[*idx..].iter()
+            .take_while(|t| !matches!(t.kind, TokenKind::Semicolon))
+            .collect();
 
-                Value::I32(int)
-            },
-            _ => todo!()
-        };
-
-        *idx += 1;
-
-        VarDecl { v, name_token }
+        let value = self.parse_expr(expr_tokens);
+        VarDecl { value, name_token }
     }
 
     fn parse_line(&mut self) {
@@ -103,7 +146,7 @@ impl<'a> Parser<'a> {
                         loc_id: token.loc_id,
                         ast_id: last_astid!(self.ctx),
                         next_id: last_astid!(self.ctx) + 1,
-                        ast_kind: AstKind::VarDecl(decl),
+                        kind: AstKind::VarDecl(decl),
                     };
 
                     append_ast!(self.ctx, ast);
@@ -113,6 +156,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn parse(&mut self, tokens: Tokens2D<'a>) {
         for line in tokens {
             self.curr_line = line;

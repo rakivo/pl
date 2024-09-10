@@ -6,10 +6,12 @@ mod ctx;
 mod ast;
 mod lexer;
 mod parser;
+mod compiler;
 
 use ctx::*;
 use lexer::*;
 use parser::*;
+use compiler::*;
 
 fn main() -> IoResultRef::<'static, ()> {
     let argv = env::args().collect::<Vec::<_>>();
@@ -32,7 +34,9 @@ fn main() -> IoResultRef::<'static, ()> {
     let mut parser = Parser::new(&ctx, lexer.tokens[0].to_vec());
     parser.parse(lexer.tokens);
 
-    ctx.borrow().asts.iter().for_each(|ast| println!("{ast:?}"));
+    // ctx.borrow().asts.iter().for_each(|ast| println!("{ast:?}"));
+    let mut compiler = Compiler::new(&ctx, file_path).unwrap();
+    compiler.compile().unwrap();
 
     Ok(())
 }

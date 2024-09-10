@@ -18,5 +18,5 @@ $(BUILD_DIR)/main: $(BUILD_DIR)/main.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/print
 $(BUILD_DIR)/%.o: %.s
 	as -o $@ $<
 
-$(BUILD_DIR)/main.s: main.ssa
+$(BUILD_DIR)/%.s: %.ssa
 	./qbe-1.2/qbe $< > $@
