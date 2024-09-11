@@ -2,10 +2,10 @@ use std::env;
 use std::fs::read_to_string;
 
 mod ast;
-mod eval;
 mod lexer;
 mod parser;
 mod compiler;
+mod expr_parser;
 
 use lexer::*;
 use parser::*;

@@ -1,21 +1,21 @@
-use super::ast::Expr;
-use crate::{Token, TokenKind, TokensRefs, VarMap, ast::VarValue};
+use super::ast::{Expr, Value};
+use crate::{Token, TokenKind, TokensRefs, VarMap};
 
 pub struct ExprParser<'a> {
     curr_idx: usize,
     curr_token: Box::<Token<'a>>,
     var_map: &'a VarMap<'a>,
-    tokens: &'a TokensRefs<'a>,
+    tokens: TokensRefs<'a>,
 }
 
 impl<'a> ExprParser<'a> {
     #[inline]
-    pub fn new(tokens: &'a TokensRefs<'a>, var_map: &'a VarMap) -> Self {
+    pub fn new(tokens: TokensRefs<'a>, var_map: &'a VarMap) -> Self {
         ExprParser {
+            curr_token: tokens[0].to_owned(),
             tokens,
             var_map,
             curr_idx: 1,
-            curr_token: tokens[0].to_owned(),
         }
     }
 
@@ -66,8 +66,6 @@ impl<'a> ExprParser<'a> {
                 Expr::Sub(Box::new(term_ast), Box::new(expr_ast))
             }
 
-            TokenKind::Poisoned => panic!("`parse_expr`: got an illegal value."),
-
             _ => term_ast,
         }
     }
@@ -89,8 +87,6 @@ impl<'a> ExprParser<'a> {
                 Expr::Div(Box::new(factor_ast), Box::new(term_ast))
             }
 
-            TokenKind::Poisoned => panic!("`parse_term`: got an illegal value."),
-
             _ => factor_ast,
         }
     }
@@ -111,8 +107,8 @@ impl<'a> ExprParser<'a> {
             TokenKind::Lit => if let Some(vd) = self.var_map.get(self.curr_token.string) {
                 self.accept_it();
                 match vd.value {
-                    VarValue::Int(ival) => Expr::Int(ival),
-                    VarValue::Flt(fval) => Expr::Flt(fval)
+                    Value::Int(ival) => Expr::Int(ival),
+                    Value::Flt(fval) => Expr::Flt(fval)
                 }
             } else {
                 panic!("{loc} error: undefined symbol: {name}",

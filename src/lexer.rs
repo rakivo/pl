@@ -61,7 +61,6 @@ impl Debug for Loc {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
-    Poisoned,
     Int,
     Flt,
     Lit,
