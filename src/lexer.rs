@@ -1,67 +1,94 @@
-use crate::ctx::{Ctx, RefCtx};
-use crate::{
-    append_loc,
-    last_loc_to_string
-};
-
+use std::ptr;
 use std::str::Lines;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::iter::{Peekable, Enumerate};
 
 pub type Tokens<'a> = Vec::<Box::<Token<'a>>>;
 pub type Tokens2D<'a> = Vec::<Tokens<'a>>;
+pub type TokensRefs<'a> = Vec::<&'a Box::<Token<'a>>>;
 pub type IoResultRef<'a, T> = Result<T, &'a std::io::Error>;
+
 type LinesIterator<'a> = Peekable::<Enumerate::<Lines<'a>>>;
 
-pub struct File {
+#[derive(Clone)]
+pub struct FilePath {
     pub len: usize,
     pub bytes: [u8; 256],
 }
 
-impl Display for File {
+impl FilePath {
+    #[inline]
+    pub fn new(file_path: &str) -> Self {
+        let mut bytes = [0; 256];
+        unsafe {
+            ptr::copy(file_path.as_ptr(), bytes.as_mut_ptr(), file_path.len());
+        }
+
+        Self {len: file_path.len(), bytes: bytes}
+    }
+}
+
+impl Display for FilePath {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{s}", s = unsafe { std::str::from_utf8_unchecked(&self.bytes[..self.len]) })
     }
 }
 
+#[derive(Clone)]
 pub struct Loc {
     pub row: usize,
     pub col: usize,
-    pub file_id: usize
+    pub file_path: Box::<FilePath>
 }
 
-impl Loc {
-    pub fn to_string(&self, ctx: &Ctx) -> String {
-        format!("{f}:{r}:{c}:",
-                f = ctx.fileid(self.file_id),
-                r = self.row + 1,
-                c = self.col + 1)
+impl Display for Loc {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{f}:{r}:{c}:",
+               f = self.file_path,
+               r = self.row + 1,
+               c = self.col + 1)
     }
 }
 
-#[derive(Debug, Clone)]
+impl Debug for Loc {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self, f)
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
+    Poisoned,
     Int,
+    Flt,
     Lit,
-    Type,
+    FltType,
+    IntType,
     Plus,
+    Asterisk,
+    LParen,
+    Minus,
+    RParen,
+    Slash,
     Equal,
     Semicolon,
 }
 
 #[derive(Debug, Clone)]
 pub struct Token<'a> {
+   pub loc: Box::<Loc>,
    pub kind: TokenKind,
-   pub loc_id: usize,
    pub string: &'a str,
 }
 
-impl Token<'_> {
+impl Display for Token<'_> {
     #[inline]
-    pub fn to_string(&self, ctx: &Ctx) -> String {
-        format!("{l} {k:?} {s}",
-                l = ctx.locid(self.loc_id).to_string(ctx),
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{l} {k:?} {s}",
+                l = self.loc,
                 k = self.kind,
                 s = self.string)
     }
@@ -69,30 +96,27 @@ impl Token<'_> {
 
 pub struct Lexer<'a> {
     row: usize,
-    file_id: usize,
-    ctx: &'a RefCtx<'a>,
     lines: LinesIterator<'a>,
+    file_path: Box::<FilePath>,
     pub tokens: Tokens2D<'a>
 }
 
 impl<'a> Lexer<'a> {
     #[inline]
     pub fn new(
-        ctx: &'a RefCtx<'a>,
         file_path: &'a str,
         content: IoResultRef<'a, &'a String>
     ) -> IoResultRef<'a, Self> {
         let lexer = Self {
-            ctx,
             row: 0,
             tokens: Vec::with_capacity(128),
             lines: content?.lines().enumerate().peekable(),
-            file_id: ctx.borrow_mut().append_file(file_path),
+            file_path: Box::new(FilePath::new(file_path))
         };
         Ok(lexer)
     }
 
-    const SEPARATORS: &'static [char] = &[';', '='];
+    const SEPARATORS: &'static [char] = &[';', '=', '*', '/', '-', '+', '(', ')'];
 
     fn split_whitespace_preserve_indices(input: &str) -> Vec::<(usize, &str)> {
         let (s, e, mut ret) = input.char_indices().fold((0, 0, Vec::with_capacity(input.len() / 2)),
@@ -120,48 +144,58 @@ impl<'a> Lexer<'a> {
     }
 
     pub const TYPES: &'static [&'static str] = &[
-        "i32"
+        "i64", "f64"
     ];
 
-    fn token_kind(&self, string: &str) -> TokenKind {
+    fn token_kind(&self, string: &str, err_loc: &Loc) -> TokenKind {
         let first = string.as_bytes()[0];
         match first as _ {
             '+' => TokenKind::Plus,
             '=' => TokenKind::Equal,
+            '*' => TokenKind::Asterisk,
+            '(' => TokenKind::LParen,
+            ')' => TokenKind::RParen,
+            '-' => TokenKind::Minus,
+            '/' => TokenKind::Slash,
             ';' => TokenKind::Semicolon,
-            '0'..='9' => TokenKind::Int,
-            'a'..='z' | 'A'..='Z' => if Self::TYPES.contains(&string) {
-                TokenKind::Type
+            '0'..='9' => if string.parse::<i64>().is_ok() {
+                TokenKind::Int
+            } else if string.parse::<f64>().is_ok() {
+                TokenKind::Flt
+            } else {
+                panic!("{err_loc} error: failed to parse number: {string}")
+            }
+            'a'..='z' | 'A'..='Z' => if let Some(idx) = Self::TYPES.iter().position(|s| s == &string) {
+                match idx {
+                    0 => TokenKind::IntType,
+                    1 => TokenKind::FltType,
+                    _ => unreachable!()
+                }
             } else {
                 TokenKind::Lit
             }
-            _ => panic!("{loc} error: unexpected token: {string}", loc = last_loc_to_string!(self.ctx))
+            _ => panic!("{err_loc} error: unexpected token: {string}")
         }
     }
 
     fn lex_line(&mut self, line: &'a str) {
         let strs = Self::split_whitespace_preserve_indices(line);
-        let len = strs.len();
-        let tokens = strs.into_iter().fold(Vec::with_capacity(len),
-            |mut tokens, (col, string)|
-        {
-            let kind = self.token_kind(string);
+        let tokens = strs.into_iter().map(|(col, string)| {
             let loc = Loc {
                 row: self.row,
                 col,
-                file_id: self.file_id
+                file_path: self.file_path.to_owned()
             };
-            let token = Token {
-                kind,
+            Token {
+                kind: self.token_kind(string, &loc),
                 string,
-                loc_id: append_loc!(self.ctx, loc),
-            };
-            tokens.push(Box::new(token));
-            tokens
-        });
+                loc: Box::new(loc),
+            }
+        }).map(Box::new).collect();
         self.tokens.push(tokens);
     }
 
+    #[inline]
     pub fn lex(&mut self) {
         while let Some((row, line)) = self.lines.next() {
             self.row = row;

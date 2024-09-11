@@ -1,138 +1,113 @@
 use crate::{
-    ctx::RefCtx,
-    append_ast,
-    last_astid,
-    locid_to_string,
-    ast::{
-        Ast,
-        Expr,
-        OpKind,
-        AstKind,
-        VarDecl,
-    },
-    lexer::{
-        Token,
-        Tokens,
-        Tokens2D,
-        TokenKind,
-    }
+    eval::parser::ExprParser,
+    ast::{Ast, AstKind, VarValue, VarDecl},
+    lexer::{Loc, Token, TokenKind, Tokens, Tokens2D}
 };
 
 use std::process::exit;
+use std::collections::HashMap;
 
-pub struct Parser<'a> {
-    ctx: &'a RefCtx<'a>,
-    curr_line: Tokens<'a>,
+pub struct Asts<'a> {
+    pub id: usize,
+    pub asts: Vec::<Ast<'a>>,
 }
 
-enum Item<'a> {
-    Expr(Expr<'a>),
-    Int(Box::<Token<'a>>),
-    Lit(Box::<Token<'a>>),
+impl<'a> Asts<'a> {
+    const RESERVE: usize = 1024;
+
+    #[inline]
+    fn new() -> Self {
+        Self {
+            id: 0,
+            asts: Vec::with_capacity(Self::RESERVE),
+        }
+    }
+
+    #[inline(always)]
+    pub fn id(&self, id: usize) -> &Ast {
+        unsafe { self.asts.get_unchecked(id) }
+    }
+
+    #[inline(always)]
+    fn append(&mut self, loc: Box::<Loc>, kind: AstKind<'a>) {
+        let ast = Ast {id: self.id, next: self.id + 1, loc, kind};
+        self.asts.push(ast);
+        self.id += 1;
+    }
+}
+
+pub type VarMap<'a> = HashMap::<&'a str, Box::<VarDecl<'a>>>;
+
+pub struct Parser<'a> {
+    pub asts: Asts<'a>,
+    curr_line: Tokens<'a>,
+    var_map: VarMap<'a>
 }
 
 impl<'a> Parser<'a> {
     #[inline(always)]
-    pub fn new(ctx: &'a RefCtx<'a>, dummy: Tokens<'a>) -> Self {
+    pub fn new(dummy: Tokens<'a>) -> Self {
         Self {
-            ctx,
+            asts: Asts::new(),
             curr_line: dummy,
+            var_map: HashMap::new()
         }
     }
 
     #[inline]
-    fn type_check_token<F, E>(&self, idx: usize, cond: F, err: E) -> &Token<'a>
+    fn type_check_token<F, E>(&self, idx: usize, cond: F, err: E) -> &Box::<Token<'a>>
     where
         F: FnOnce(&Token) -> bool,
-        E: FnOnce((&'a str, usize))
+        E: FnOnce((&'a str, &Box::<Loc>))
     {
         if let Some(t) = self.curr_line.get(idx) {
-            if cond(t) { t } else { err((t.string, t.loc_id)); exit(1) }
-        } else { err(("<eof>", self.curr_line[idx].loc_id)); exit(1) }
+            if cond(t) { t } else { err((t.string, &t.loc)); exit(1) }
+        } else { err(("<eof>", &self.curr_line[idx].loc)); exit(1) }
     }
 
     #[inline]
     fn type_check_token_owned<F, E>(&self, idx: usize, cond: F, err: E) -> Box::<Token<'a>>
     where
         F: FnOnce(&Token) -> bool,
-        E: FnOnce((&'a str, usize))
+        E: FnOnce((&'a str, &Box::<Loc>))
     {
         if let Some(t) = self.curr_line.get(idx) {
             if cond(t) {
                 self.curr_line[idx].to_owned()
-            } else { err((t.string, t.loc_id)); exit(1) }
-        } else { err(("<eof>", self.curr_line[idx].loc_id)); exit(1) }
-    }
-
-    fn parse_expr(&self, tokens: Vec::<&Box::<Token::<'a>>>) -> Expr<'a> {
-        fn parse_term<'a>(token: &Box::<Token<'a>>) -> Expr<'a> {
-            match token.kind {
-                TokenKind::Int => Expr::Int(token.to_owned()),
-                TokenKind::Lit => Expr::Lit(token.to_owned()),
-                _ => panic!("Expected a term, found: {:?}", token.kind),
-            }
-        }
-
-        fn parse_sum<'a>(ctx: &RefCtx, tokens: Vec::<&Box::<Token<'a>>>, mut i: usize) -> (Expr<'a>, usize) {
-            let mut expr = parse_term(&tokens[i]);
-            i += 1;
-
-            while i < tokens.len() {
-                let token = &tokens[i];
-                match token.kind {
-                    TokenKind::Plus => {
-                        i += 1;
-                        if i >= tokens.len() {
-                            panic!("{l} error: unexpected <eof> after `+`",
-                                   l = locid_to_string!(ctx, token.loc_id));
-                        }
-                        let rhs = parse_term(&tokens[i]);
-                        expr = Expr::Op(OpKind::Sum(Box::new(expr), Box::new(rhs)));
-                    }
-                    _ => break
-                }
-                i += 1;
-            }
-
-            (expr, i)
-        }
-
-        parse_sum(&self.ctx, tokens, 0).0
+            } else { err((t.string, &t.loc)); exit(1) }
+        } else { err(("<eof>", &self.curr_line[idx].loc)); exit(1) }
     }
 
     fn parse_decl(&self, idx: &mut usize) -> VarDecl<'a> {
+        let ref ty_token = self.curr_line[*idx];
+
         *idx += 1;
 
         let name_token = self.type_check_token_owned(*idx, |t| {
             matches!(t.kind, TokenKind::Lit)
-        }, |(string, loc_id)| {
-            panic!("{l} error: expected literal after the type, but got: {string}",
-                   l = locid_to_string!(self.ctx, loc_id))
+        }, |(string, loc)| {
+            panic!("{loc} error: expected literal after the type, but got: {string}")
         });
 
         *idx += 1;
-
-        let eq_token = self.type_check_token(*idx, |t| {
-            matches!(t.kind, TokenKind::Equal)
-        }, |(string, loc_id)| {
-            panic!("{l} error: expected equal after the name, but got: {string}",
-                   l = locid_to_string!(self.ctx, loc_id))
-        });
-
         *idx += 1;
-
-        if *idx > self.curr_line.len() {
-            let s = self.curr_line.get(1).map(|t| t.string).unwrap_or("<eof>");
-            panic!("{l} error: expected expr after the equal sign, but got: {s}",
-                   l = locid_to_string!(self.ctx, eq_token.loc_id))
-        }
 
         let expr_tokens = self.curr_line[*idx..].iter()
-            .take_while(|t| !matches!(t.kind, TokenKind::Semicolon))
-            .collect();
+            .collect::<Vec::<_>>();
 
-        let value = self.parse_expr(expr_tokens);
-        VarDecl { value, name_token }
+        *idx += 1;
+
+        match ty_token.kind {
+            TokenKind::IntType => VarDecl {
+                name_token,
+                value: VarValue::Int(ExprParser::new(&expr_tokens, &self.var_map).parse().eval_int()),
+            },
+            TokenKind::FltType => VarDecl {
+                name_token,
+                value: VarValue::Flt(ExprParser::new(&expr_tokens, &self.var_map).parse().eval_flt()),
+            },
+            _ => unreachable!()
+        }
     }
 
     fn parse_line(&mut self) {
@@ -140,16 +115,10 @@ impl<'a> Parser<'a> {
         while idx < self.curr_line.len() {
             let ref token = self.curr_line[idx];
             match token.kind {
-                TokenKind::Type => {
-                    let decl = self.parse_decl(&mut idx);
-                    let ast = Ast {
-                        loc_id: token.loc_id,
-                        ast_id: last_astid!(self.ctx),
-                        next_id: last_astid!(self.ctx) + 1,
-                        kind: AstKind::VarDecl(decl),
-                    };
-
-                    append_ast!(self.ctx, ast);
+                TokenKind::IntType | TokenKind::FltType => {
+                    let decl = Box::new(self.parse_decl(&mut idx));
+                    self.var_map.insert(decl.name_token.string, decl.to_owned());
+                    self.asts.append(token.loc.to_owned(), AstKind::VarDecl(decl));
                 },
                 _ => idx += 1
             }

@@ -1,33 +1,38 @@
-use crate::lexer::Token;
+use crate::lexer::{Loc, Token};
 
-#[derive(Debug)]
-pub enum OpKind<'a> {
-    Sum(Box::<Expr<'a>>, Box::<Expr<'a>>)
+#[derive(Debug, Clone)]
+pub enum VarValue {
+    Int(i64),
+    Flt(f64)
 }
 
-#[derive(Debug)]
-pub enum Expr<'a> {
-    Op(OpKind<'a>),
-    Expr(Box::<Expr<'a>>),
-    Int(Box::<Token<'a>>),
-    Lit(Box::<Token<'a>>)
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VarDecl<'a> {
-    pub value: Expr<'a>,
+    pub value: VarValue,
     pub name_token: Box::<Token<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AstKind<'a> {
-    VarDecl(VarDecl<'a>)
+    Poisoned,
+    VarDecl(Box::<VarDecl<'a>>)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ast<'a> {
-    pub loc_id: usize,
-    pub ast_id: usize,
-    pub next_id: usize,
-    pub kind: AstKind<'a>
+    pub id: usize,
+    pub loc: Box::<Loc>,
+    pub kind: AstKind<'a>,
+    pub next: usize,
+}
+
+impl Ast<'_> {
+    pub fn alloc_poisoned() -> Self {
+        Ast {
+            id: 0,
+            kind: AstKind::Poisoned,
+            loc: unsafe { Box::from_raw(0 as _) },
+            next: 0,
+        }
+    }
 }
