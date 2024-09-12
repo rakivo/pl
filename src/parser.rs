@@ -10,7 +10,6 @@ use std::collections::HashMap;
 pub type VarMap<'a> = HashMap::<&'a str, Box::<VarDecl<'a>>>;
 
 pub struct Parser<'a, 'b> {
-    pub asts: Asts<'a>,
     line_cur: usize,
     idx: usize,
     // current line
@@ -23,7 +22,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     #[inline]
     pub fn new(tokens: &'b Tokens2D<'a>) -> Self {
         Self {
-            asts: Asts::new(),
             tokens,
             cl: &tokens[0],
             idx: 0,
@@ -268,9 +266,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.advance();
         }
 
-        let curr_id = self.asts.id;
         let mut body = Asts::new();
-        while !self.parse_line_buf(true, &mut body) {
+        while !self.parse_line(true, &mut body) {
             self.line_cur += 1;
             if self.line_cur == self.tokens.len() {
                 panic!("{loc} eww no rcurly matched bruv",
@@ -284,7 +281,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Fn { ret_ty, body: body.asts, args, name_token }
     }
 
-    fn parse_line_buf(&mut self, expect_rcurly: bool, asts_buf: &mut Asts<'a>) -> bool {
+    fn parse_line(&mut self, expect_rcurly: bool, asts_buf: &mut Asts<'a>) -> bool {
         while self.idx < self.cl.len() {
             let ref token = self.cl[self.idx];
             match token.kind {
@@ -312,21 +309,22 @@ impl<'a, 'b> Parser<'a, 'b> {
         } false
     }
 
-    fn parse_line(&mut self, expect_rcurly: bool) -> bool {
-        let mut asts = Asts::new();
-        let met = self.parse_line_buf(expect_rcurly, &mut asts);
-        for ast in asts.asts {
-            self.asts.append(ast.loc, ast.kind);
-        }
-        met
-    }
+    // fn parse_line(&mut self, expect_rcurly: bool) -> bool {
+
+    //     let met = self.parse_line_buf(expect_rcurly, &mut asts);
+    //     for ast in asts.asts {
+    //         self.asts.append(ast.loc, ast.kind);
+    //     }
+    //     met
+    // }
 
     #[inline(always)]
-    pub fn parse(&mut self) {
+    pub fn parse(&mut self) -> Asts {
+        let mut asts = Asts::new();
         while self.line_cur < self.tokens.len() {
             self.cl = &self.tokens[self.line_cur];
-            self.parse_line(false);
+            self.parse_line(false, &mut asts);
             self.line_cur += 1;
-        }
+        } asts
     }
 }

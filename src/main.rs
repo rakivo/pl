@@ -29,14 +29,14 @@ fn main() -> IoResultRef::<'static, ()> {
     if lexer.tokens.is_empty() { return Ok(()) }
 
     let mut parser = Parser::new(&lexer.tokens);
-    parser.parse();
+    let asts = parser.parse();
 
-    // parser.asts.asts.iter().for_each(|ast| {
+    // asts.asts.iter().for_each(|ast| {
     //     println!("{ast:?}");
     // });
 
     let mut compiler = Compiler::new(file_path).unwrap();
-    compiler.compile(parser.asts).unwrap();
+    compiler.compile(asts).unwrap();
 
     Ok(())
 }
