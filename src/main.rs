@@ -31,9 +31,7 @@ fn main() -> IoResultRef::<'static, ()> {
     let mut parser = Parser::new(&lexer.tokens);
     let asts = parser.parse();
 
-    // asts.asts.iter().for_each(|ast| {
-    //     println!("{ast:?}");
-    // });
+    // println!("{:#?}", asts.asts);
 
     let mut compiler = Compiler::new(file_path).unwrap();
     compiler.compile(asts).unwrap();

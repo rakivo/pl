@@ -200,6 +200,7 @@ impl<'a> Lexer<'a> {
     #[inline]
     pub fn lex(&mut self) {
         while let Some((row, line)) = self.lines.next() {
+            if line.is_empty() { continue }
             self.row = row;
             self.lex_line(line);
         }

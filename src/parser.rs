@@ -1,7 +1,7 @@
 use crate::{
     expr_parser::ExprParser,
     lexer::{Loc, Token, TokenKind, Tokens, Tokens2D},
-    ast::{Ast, Fn, Asts, Type, FnArg, AstKind, FnCall, Value, VarDecl},
+    ast::{Fn, Asts, Type, FnArg, AstKind, FnCall, Value, VarDecl},
 };
 
 use std::process::exit;
@@ -12,6 +12,7 @@ pub type VarMap<'a> = HashMap::<&'a str, Box::<VarDecl<'a>>>;
 pub struct Parser<'a, 'b> {
     line_cur: usize,
     idx: usize,
+    eof: bool,
     // current line
     cl: &'b Tokens<'a>,
     tokens: &'b Tokens2D<'a>,
@@ -26,6 +27,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             cl: &tokens[0],
             idx: 0,
             line_cur: 0,
+            eof: false,
             var_map: HashMap::new()
         }
     }
@@ -60,7 +62,11 @@ impl<'a, 'b> Parser<'a, 'b> {
         if self.idx >= self.cl.len() {
             self.idx = 0;
             self.line_cur += 1;
-            self.cl = &self.tokens[self.line_cur];
+            if self.line_cur >= self.tokens.len() {
+                self.eof = true;
+            } else {
+                self.cl = &self.tokens[self.line_cur];
+            }
         }
     }
 
@@ -137,7 +143,10 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
 
             self.idx += 1;
-            if self.idx + 1 < self.cl.len() {
+            if !matches! {
+                self.cl.get(self.idx),
+                Some(t) if t.kind == TokenKind::RParen
+            } {
                 _ = self.type_check_token(|t| {
                     t.kind == TokenKind::Comma
                 }, |string, loc| {
@@ -156,12 +165,11 @@ impl<'a, 'b> Parser<'a, 'b> {
             panic!("{loc} rparen was not met bruv", loc = name_token.loc);
         }
 
+        self.advance();
         FnCall {args, name_token}
     }
 
     fn parse_fn(&mut self) -> Fn<'a> {
-        let ref fn_token = self.cl[self.idx];
-
         self.advance();
 
         let name_token = self.type_check_token_owned(|t| {
@@ -251,8 +259,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         let ref lcurly_token = 'lcurly: loop {
             if self.cl.is_empty() {
-                panic!("{loc} expected `{{` bruv",
-                       loc = name_token.loc);
+                panic!("{loc} expected `{{` bruv", loc = name_token.loc);
             }
 
             let ref t = self.cl[self.idx];
@@ -268,28 +275,30 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         let mut body = Asts::new();
         while !self.parse_line(true, &mut body) {
-            self.line_cur += 1;
+            self.advance();
             if self.line_cur == self.tokens.len() {
-                panic!("{loc} eww no rcurly matched bruv",
-                       loc = lcurly_token.loc)
+                panic!("{loc} eww no rcurly matched bruv", loc = lcurly_token.loc)
             }
             self.cl = &self.tokens[self.line_cur];
         }
 
+        println!("TOKENS: {:?}", &self.cl[self.idx]);
         self.advance();
 
         Fn { ret_ty, body: body.asts, args, name_token }
     }
 
-    fn parse_line(&mut self, expect_rcurly: bool, asts_buf: &mut Asts<'a>) -> bool {
+    fn parse_line(&mut self, expect_matching: bool, asts_buf: &mut Asts<'a>) -> bool {
         while self.idx < self.cl.len() {
+            if self.eof { break }
             let ref token = self.cl[self.idx];
+            println!("TOKEN: {token:?}");
             match token.kind {
-                TokenKind::RCurly => if expect_rcurly {
+                TokenKind::RCurly |
+                TokenKind::RParen => if expect_matching {
                     return true
                 } else {
-                    panic!("{loc} unexpected `}}` bruv",
-                           loc = token.loc)
+                    panic!("{loc} unexpected `}}` bruv", loc = token.loc)
                 }
                 TokenKind::Fn => {
                     let fn_ = Box::new(self.parse_fn());
@@ -309,22 +318,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         } false
     }
 
-    // fn parse_line(&mut self, expect_rcurly: bool) -> bool {
-
-    //     let met = self.parse_line_buf(expect_rcurly, &mut asts);
-    //     for ast in asts.asts {
-    //         self.asts.append(ast.loc, ast.kind);
-    //     }
-    //     met
-    // }
-
     #[inline(always)]
     pub fn parse(&mut self) -> Asts {
         let mut asts = Asts::new();
         while self.line_cur < self.tokens.len() {
+            if self.eof { break }
             self.cl = &self.tokens[self.line_cur];
             self.parse_line(false, &mut asts);
-            self.line_cur += 1;
+            self.advance();
         } asts
     }
 }
