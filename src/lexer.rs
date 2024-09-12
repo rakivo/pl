@@ -23,8 +23,7 @@ impl FilePath {
         unsafe {
             ptr::copy(file_path.as_ptr(), bytes.as_mut_ptr(), file_path.len());
         }
-
-        Self {len: file_path.len(), bytes: bytes}
+        Self {len: file_path.len(), bytes}
     }
 }
 
@@ -61,19 +60,25 @@ impl Debug for Loc {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum TokenKind {
+    Fn,
     Int,
     Flt,
     Lit,
+    Comma,
     FltType,
     IntType,
     Plus,
     Asterisk,
-    LParen,
     Minus,
-    RParen,
-    Slash,
     Equal,
     Semicolon,
+    Slash,
+    LParen,
+    RParen,
+    LCurly,
+    RCurly,
+    LAngleBracket,
+    RAngleBracket,
 }
 
 #[derive(Debug, Clone)]
@@ -87,9 +92,9 @@ impl Display for Token<'_> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{l} {k:?} {s}",
-                l = self.loc,
-                k = self.kind,
-                s = self.string)
+               l = self.loc,
+               k = self.kind,
+               s = self.string)
     }
 }
 
@@ -115,7 +120,7 @@ impl<'a> Lexer<'a> {
         Ok(lexer)
     }
 
-    const SEPARATORS: &'static [char] = &[';', '=', '*', '/', '-', '+', '(', ')'];
+    const SEPARATORS: &'static [char] = &[';', '=', '*', '/', '-', '+', '(', ')', ','];
 
     fn split_whitespace_preserve_indices(input: &str) -> Vec::<(usize, &str)> {
         let (s, e, mut ret) = input.char_indices().fold((0, 0, Vec::with_capacity(input.len() / 2)),
@@ -142,20 +147,21 @@ impl<'a> Lexer<'a> {
         ret
     }
 
-    pub const TYPES: &'static [&'static str] = &[
-        "i64", "f64"
-    ];
-
     fn token_kind(&self, string: &str, err_loc: &Loc) -> TokenKind {
         let first = string.as_bytes()[0];
         match first as _ {
             '+' => TokenKind::Plus,
             '=' => TokenKind::Equal,
+            '-' => TokenKind::Minus,
+            '/' => TokenKind::Slash,
             '*' => TokenKind::Asterisk,
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
-            '-' => TokenKind::Minus,
-            '/' => TokenKind::Slash,
+            '{' => TokenKind::LCurly,
+            '}' => TokenKind::RCurly,
+            '>' => TokenKind::RAngleBracket,
+            '<' => TokenKind::LAngleBracket,
+            ',' => TokenKind::Comma,
             ';' => TokenKind::Semicolon,
             '0'..='9' => if string.parse::<i64>().is_ok() {
                 TokenKind::Int
@@ -164,14 +170,11 @@ impl<'a> Lexer<'a> {
             } else {
                 panic!("{err_loc} error: failed to parse number: {string}")
             }
-            'a'..='z' | 'A'..='Z' => if let Some(idx) = Self::TYPES.iter().position(|s| s == &string) {
-                match idx {
-                    0 => TokenKind::IntType,
-                    1 => TokenKind::FltType,
-                    _ => unreachable!()
-                }
-            } else {
-                TokenKind::Lit
+            'a'..='z' | 'A'..='Z' => match string {
+                "i64" => TokenKind::IntType,
+                "f64" => TokenKind::FltType,
+                "fn"  => TokenKind::Fn,
+                _ => TokenKind::Lit,
             }
             _ => panic!("{err_loc} error: unexpected token: {string}")
         }

@@ -1,100 +1,98 @@
 use crate::{
-    ast::{Ast, AstKind, FnCall, Value, VarDecl}, expr_parser::ExprParser, lexer::{Loc, Token, TokenKind, Tokens, Tokens2D}
+    expr_parser::ExprParser,
+    lexer::{Loc, Token, TokenKind, Tokens, Tokens2D},
+    ast::{Ast, Fn, Asts, Type, FnArg, AstKind, FnCall, Value, VarDecl},
 };
 
 use std::process::exit;
 use std::collections::HashMap;
 
-pub struct Asts<'a> {
-    pub id: usize,
-    pub asts: Vec::<Ast<'a>>,
-}
-
-impl<'a> Asts<'a> {
-    const RESERVE: usize = 1024;
-
-    #[inline]
-    fn new() -> Self {
-        Self {
-            id: 0,
-            asts: Vec::with_capacity(Self::RESERVE),
-        }
-    }
-
-    #[inline(always)]
-    pub fn id(&self, id: usize) -> &Ast {
-        unsafe { self.asts.get_unchecked(id) }
-    }
-
-    #[inline(always)]
-    fn append(&mut self, loc: Box::<Loc>, kind: AstKind<'a>) {
-        let ast = Ast {id: self.id, next: self.id + 1, loc, kind};
-        self.asts.push(ast);
-        self.id += 1;
-    }
-}
-
 pub type VarMap<'a> = HashMap::<&'a str, Box::<VarDecl<'a>>>;
 
-pub struct Parser<'a> {
+pub struct Parser<'a, 'b> {
     pub asts: Asts<'a>,
-    curr_line: Tokens<'a>,
+    line_cur: usize,
+    idx: usize,
+    // current line
+    cl: &'b Tokens<'a>,
+    tokens: &'b Tokens2D<'a>,
     var_map: VarMap<'a>
 }
 
-impl<'a> Parser<'a> {
-    #[inline(always)]
-    pub fn new(dummy: Tokens<'a>) -> Self {
+impl<'a, 'b> Parser<'a, 'b> {
+    #[inline]
+    pub fn new(tokens: &'b Tokens2D<'a>) -> Self {
         Self {
             asts: Asts::new(),
-            curr_line: dummy,
+            tokens,
+            cl: &tokens[0],
+            idx: 0,
+            line_cur: 0,
             var_map: HashMap::new()
         }
     }
 
     #[inline]
-    fn type_check_token<F, E>(&self, idx: usize, cond: F, err: E) -> &Box::<Token<'a>>
+    fn type_check_token<F, E>(&self, cond: F, err: E) -> &Box::<Token<'a>>
     where
         F: FnOnce(&Token) -> bool,
-        E: FnOnce((&'a str, &Box::<Loc>))
+        E: FnOnce(&'a str, &Box::<Loc>)
     {
-        if let Some(t) = self.curr_line.get(idx) {
-            if cond(t) { t } else { err((t.string, &t.loc)); exit(1) }
-        } else { err(("<eof>", &self.curr_line[idx].loc)); exit(1) }
+        if let Some(t) = self.cl.get(self.idx) {
+            if cond(t) { t } else { err(t.string, &t.loc); exit(1) }
+        } else { err("<eof>", &self.cl[self.idx].loc); exit(1) }
     }
 
     #[inline]
-    fn type_check_token_owned<F, E>(&self, idx: usize, cond: F, err: E) -> Box::<Token<'a>>
+    fn type_check_token_owned<F, E>(&self, cond: F, err: E) -> Box::<Token<'a>>
     where
         F: FnOnce(&Token) -> bool,
-        E: FnOnce((&'a str, &Box::<Loc>))
+        E: FnOnce(&'a str, &Box::<Loc>)
     {
-        if let Some(t) = self.curr_line.get(idx) {
+        if let Some(t) = self.cl.get(self.idx) {
             if cond(t) {
-                self.curr_line[idx].to_owned()
-            } else { err((t.string, &t.loc)); exit(1) }
-        } else { err(("<eof>", &self.curr_line[idx].loc)); exit(1) }
+                self.cl[self.idx].to_owned()
+            } else { err(t.string, &t.loc); exit(1) }
+        } else { err("<eof>", &self.cl[self.idx].loc); exit(1) }
     }
 
-    fn parse_decl(&self, idx: &mut usize) -> VarDecl<'a> {
-        let ref ty_token = self.curr_line[*idx];
+    #[inline]
+    fn advance(&mut self) {
+        self.idx += 1;
+        if self.idx >= self.cl.len() {
+            self.idx = 0;
+            self.line_cur += 1;
+            self.cl = &self.tokens[self.line_cur];
+        }
+    }
 
-        *idx += 1;
+    fn parse_decl(&mut self) -> VarDecl<'a> {
+        let ref ty_token = self.cl[self.idx];
 
-        let name_token = self.type_check_token_owned(*idx, |t| {
+        self.advance();
+
+        let name_token = self.type_check_token_owned(|t| {
             matches!(t.kind, TokenKind::Lit)
-        }, |(string, loc)| {
+        }, |string, loc| {
             panic!("{loc} error: expected literal after the type, but got: {string}")
         });
 
-        *idx += 1;
-        *idx += 1;
+        self.advance();
+        self.advance();
 
-        let expr_tokens = self.curr_line[*idx..].iter()
-            .take_while(|t| t.kind != TokenKind::Semicolon)
-            .collect::<Vec::<_>>();
+        let mut expr_tokens = Vec::with_capacity(self.cl.len() - self.idx);
+        while self.cl[self.idx].kind != TokenKind::Semicolon {
+            expr_tokens.push(&self.cl[self.idx]);
+            self.advance();
+        }
 
-        *idx += expr_tokens.len() + 1;
+        let _ = self.type_check_token(|t| {
+            matches!(t.kind, TokenKind::Semicolon)
+        }, |string, loc| {
+            panic!("{loc} error: expected semicolon after decl, but got: {string}")
+        });
+
+        self.advance();
 
         match ty_token.kind {
             TokenKind::IntType => VarDecl {
@@ -109,16 +107,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_func(&self, idx: &mut usize) -> FnCall<'a> {
-        let name_token = self.curr_line[*idx].to_owned();
-        *idx += 1;
-        *idx += 1;
+    fn parse_fn_call(&mut self) -> FnCall<'a> {
+        let name_token = self.cl[self.idx].to_owned();
+        self.advance();
 
-        let args = self.curr_line[*idx..].iter()
-            .take_while(|t| t.kind != TokenKind::RParen)
-            .map(|t|
-        {
-            match t.kind {
+        if !matches! {
+            self.cl.get(self.idx),
+            Some(t) if t.kind == TokenKind::LParen
+        } {
+            panic!("{loc} expected lparen bruv",
+                   loc = name_token.loc);
+        }
+
+        self.advance();
+
+        let mut args = Vec::with_capacity(self.cl.len() - self.idx);
+        while self.idx < self.cl.len() {
+            let ref t = self.cl[self.idx];
+            let value = match t.kind {
+                TokenKind::RParen => break,
                 TokenKind::Int => Value::Int(ExprParser::new(vec![t], &self.var_map).parse().eval_int()),
                 TokenKind::Flt => Value::Flt(ExprParser::new(vec![t], &self.var_map).parse().eval_flt()),
                 TokenKind::Lit => if let Some(lit) = self.var_map.get(t.string) {
@@ -129,54 +136,197 @@ impl<'a> Parser<'a> {
                 }
                 _ => panic!("{loc} expected int or float bruv, but got: {got}",
                             loc = t.loc, got = t.string)
-            }
-        }).collect::<Vec::<_>>();
+            };
 
-        *idx += args.len() + 1;
+            self.idx += 1;
+            if self.idx + 1 < self.cl.len() {
+                _ = self.type_check_token(|t| {
+                    t.kind == TokenKind::Comma
+                }, |string, loc| {
+                    panic!("{loc} expected comma after an argument, but got: {string}")
+                });
+                self.idx += 1;
+            }
+
+            args.push(value);
+        }
 
         if !matches! {
-            self.curr_line.get(*idx - 1),
+            self.cl.get(self.idx),
             Some(t) if t.kind == TokenKind::RParen
         } {
-            panic!("{loc} rparen was not met bruv",
-                   loc = name_token.loc);
+            panic!("{loc} rparen was not met bruv", loc = name_token.loc);
         }
 
         FnCall {args, name_token}
     }
 
-    fn parse_line(&mut self) {
-        let mut idx = 0;
-        while idx < self.curr_line.len() {
-            let ref token = self.curr_line[idx];
-            match token.kind {
-                TokenKind::Lit => {
-                    if !matches! {
-                        self.curr_line.get(idx + 1),
-                        Some(t) if t.kind == TokenKind::LParen
-                    } {
-                        panic!("{loc} expected lparen bruv",
-                               loc = token.loc);
-                    }
+    fn parse_fn(&mut self) -> Fn<'a> {
+        let ref fn_token = self.cl[self.idx];
 
-                    let fcall = Box::new(self.parse_func(&mut idx));
-                    self.asts.append(token.loc.to_owned(), AstKind::FnCall(fcall));
+        self.advance();
+
+        let name_token = self.type_check_token_owned(|t| {
+            matches!(t.kind, TokenKind::Lit)
+        }, |string, loc| {
+            panic!("{loc} error: expected literal after the fn keyword, but got: {string}")
+        });
+
+        self.advance();
+
+        if !matches! {
+            self.cl.get(self.idx),
+            Some(t) if t.kind == TokenKind::LParen
+        } {
+            panic!("{loc} expected lparen bruv",
+                   loc = name_token.loc);
+        }
+
+        self.advance();
+
+        let mut args = Vec::with_capacity(self.cl.len() - self.idx);
+        while self.idx < self.cl.len() {
+            let ref t = self.cl[self.idx];
+            let ty = match t.kind {
+                TokenKind::RParen  => break,
+                TokenKind::IntType => Type::I64,
+                TokenKind::FltType => Type::F64,
+                _ => panic!("{loc} expected type but got: {string}",
+                            loc = t.loc, string = t.string)
+            };
+
+            self.advance();
+            let name_token = self.type_check_token_owned(|t| {
+                matches!(t.kind, TokenKind::Lit)
+            }, |string, loc| {
+                panic!("{loc} error: expected literal after the type, but got: {string}")
+            });
+
+            self.advance();
+            let arg = FnArg { ty, name_token };
+            args.push(arg);
+        }
+
+        if !matches! {
+            self.cl.get(self.idx),
+            Some(t) if t.kind == TokenKind::RParen
+        } {
+            panic!("{loc} rparen was not met bruv", loc = name_token.loc);
+        }
+
+        self.advance();
+
+        let ret_ty = if self.cl[self.idx].kind == TokenKind::LCurly {
+            None
+        } else {
+            let _ = self.type_check_token_owned(|t| {
+                matches!(t.kind, TokenKind::Minus)
+            }, |string, loc| {
+                panic!("{loc} error: Expected arrow after rparen, but got: {string}")
+            });
+
+            self.advance();
+
+            let _ = self.type_check_token_owned(|t| {
+                matches!(t.kind, TokenKind::RAngleBracket)
+            }, |string, loc| {
+                panic!("{loc} error: Expected arrow after rparen, but got: {string}")
+            });
+
+            self.advance();
+
+            let ty = match self.cl[self.idx].kind {
+                TokenKind::IntType => Type::I64,
+                TokenKind::FltType => Type::F64,
+                _ => panic!("{loc} error: Expected arrow after rparen, but got: {string}",
+                            loc = self.cl[self.idx].loc,
+                            string = self.cl[self.idx].string)
+            };
+
+            self.advance();
+            Some(ty)
+        };
+
+        while self.cl.is_empty() {
+            self.advance();
+        }
+
+        let ref lcurly_token = 'lcurly: loop {
+            if self.cl.is_empty() {
+                panic!("{loc} expected `{{` bruv",
+                       loc = name_token.loc);
+            }
+
+            let ref t = self.cl[self.idx];
+            self.advance();
+            if t.kind == TokenKind::LCurly {
+                break 'lcurly t;
+            }
+        };
+
+        while self.cl.is_empty() {
+            self.advance();
+        }
+
+        let curr_id = self.asts.id;
+        let mut body = Asts::new();
+        while !self.parse_line_buf(true, &mut body) {
+            self.line_cur += 1;
+            if self.line_cur == self.tokens.len() {
+                panic!("{loc} eww no rcurly matched bruv",
+                       loc = lcurly_token.loc)
+            }
+            self.cl = &self.tokens[self.line_cur];
+        }
+
+        self.advance();
+
+        Fn { ret_ty, body: body.asts, args, name_token }
+    }
+
+    fn parse_line_buf(&mut self, expect_rcurly: bool, asts_buf: &mut Asts<'a>) -> bool {
+        while self.idx < self.cl.len() {
+            let ref token = self.cl[self.idx];
+            match token.kind {
+                TokenKind::RCurly => if expect_rcurly {
+                    return true
+                } else {
+                    panic!("{loc} unexpected `}}` bruv",
+                           loc = token.loc)
+                }
+                TokenKind::Fn => {
+                    let fn_ = Box::new(self.parse_fn());
+                    asts_buf.append(token.loc.to_owned(), AstKind::Fn(fn_));
+                }
+                TokenKind::Lit => {
+                    let fcall = Box::new(self.parse_fn_call());
+                    asts_buf.append(token.loc.to_owned(), AstKind::FnCall(fcall));
                 }
                 TokenKind::IntType | TokenKind::FltType => {
-                    let decl = Box::new(self.parse_decl(&mut idx));
+                    let decl = Box::new(self.parse_decl());
                     self.var_map.insert(decl.name_token.string, decl.to_owned());
-                    self.asts.append(token.loc.to_owned(), AstKind::VarDecl(decl));
-                },
-                _ => idx += 1
+                    asts_buf.append(token.loc.to_owned(), AstKind::VarDecl(decl));
+                }
+                _ => self.idx += 1
             }
+        } false
+    }
+
+    fn parse_line(&mut self, expect_rcurly: bool) -> bool {
+        let mut asts = Asts::new();
+        let met = self.parse_line_buf(expect_rcurly, &mut asts);
+        for ast in asts.asts {
+            self.asts.append(ast.loc, ast.kind);
         }
+        met
     }
 
     #[inline(always)]
-    pub fn parse(&mut self, tokens: Tokens2D<'a>) {
-        for line in tokens {
-            self.curr_line = line;
-            self.parse_line();
+    pub fn parse(&mut self) {
+        while self.line_cur < self.tokens.len() {
+            self.cl = &self.tokens[self.line_cur];
+            self.parse_line(false);
+            self.line_cur += 1;
         }
     }
 }

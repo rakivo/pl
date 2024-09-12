@@ -19,7 +19,27 @@ pub struct FnCall<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub enum Type {
+    I64, F64
+}
+
+#[derive(Debug, Clone)]
+pub struct FnArg<'a> {
+    pub name_token: Box::<Token<'a>>,
+    pub ty: Type
+}
+
+#[derive(Debug, Clone)]
+pub struct Fn<'a> {
+    pub ret_ty: Option::<Type>,
+    pub args: Vec::<FnArg<'a>>,
+    pub body: Vec::<Ast<'a>>,
+    pub name_token: Box::<Token<'a>>,
+}
+
+#[derive(Debug, Clone)]
 pub enum AstKind<'a> {
+    Fn(Box::<Fn<'a>>),
     FnCall(Box::<FnCall<'a>>),
     VarDecl(Box::<VarDecl<'a>>)
 }
@@ -30,6 +50,41 @@ pub struct Ast<'a> {
     pub loc: Box::<Loc>,
     pub kind: AstKind<'a>,
     pub next: usize,
+}
+
+pub struct Asts<'a> {
+    pub id: usize,
+    pub asts: Vec::<Ast<'a>>,
+}
+
+impl<'a> Asts<'a> {
+    const RESERVE: usize = 1024;
+
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            id: 0,
+            asts: Vec::with_capacity(Self::RESERVE),
+        }
+    }
+
+    #[inline(always)]
+    pub fn id(&self, id: usize) -> &Ast {
+        unsafe { self.asts.get_unchecked(id) }
+    }
+
+    #[inline(always)]
+    pub fn append(&mut self, loc: Box::<Loc>, kind: AstKind<'a>) {
+        let ast = Ast {id: self.id, next: self.id + 1, loc, kind};
+        self.asts.push(ast);
+        self.id += 1;
+    }
+
+    #[inline(always)]
+    pub fn append_ast(&mut self, ast: Ast<'a>) {
+        self.asts.push(ast);
+        self.id += 1;
+    }
 }
 
 #[derive(Debug, PartialEq)]
