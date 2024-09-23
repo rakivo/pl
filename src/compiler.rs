@@ -1,13 +1,15 @@
+use crate::parser::Ctx;
 use crate::lexer::Token;
-use crate::parser::SymMap;
 use crate::ast::{
     Ast, Type, Fn,
     Asts, AstKind, VarDecl, FnCall, Expr
 };
 
-use std::fs::File;
-use std::io::Write;
-use std::ops::Deref;
+use std::{
+    fs::File,
+    io::Write,
+    ops::Deref
+};
 
 const TAB: &'static str = "\t";
 
@@ -25,27 +27,26 @@ macro_rules! writet {
     }};
 }
 
-pub struct Compiler<'a> {
+pub struct Compiler {
     s: File,
-    sym_map: &'a SymMap<'a>,
     gen_file_path: String,
 }
 
-impl<'a> Compiler<'a> {
-    pub fn new(_file_path: &str, sym_map: &'a SymMap<'a>) -> std::io::Result::<Self> {
+impl Compiler {
+    pub fn new(_file_path: &str) -> std::io::Result::<Self> {
         let gen_file_path = "out.ssa".to_owned();
         let s = File::create(&gen_file_path)?;
-        let compiler = Self { s, sym_map, gen_file_path };
+        let compiler = Self { s, gen_file_path };
         Ok(compiler)
     }
 
-    fn compile_var_decl(&mut self, vd: &VarDecl) -> std::io::Result::<()> {
+    fn compile_var_decl(&mut self, vd: &VarDecl, ctx: &Box::<Ctx>) -> std::io::Result::<()> {
         writet!(self.s, "%{name} =", name = vd.name_token.string)?;
-        fn compile_expr(s: &mut File, expr: &Box::<Expr>, sym_map: &SymMap) -> std::io::Result::<()> {
+        fn compile_expr(s: &mut File, ctx: &Box::<Ctx>, expr: &Box::<Expr>) -> std::io::Result::<()> {
             match expr.deref() {
-                Expr::Lit(lit) => if let Some(sym) = sym_map.get(lit.string) {
+                Expr::Lit(lit) => if let Some(sym) = ctx.sym_map().get(lit.string) {
                     match sym.kind {
-                        AstKind::VarDecl(ref vd) => compile_expr(s, &vd.value, sym_map)?,
+                        AstKind::VarDecl(ref vd) => compile_expr(s, ctx, &vd.value)?,
                         _ => todo!()
                     }
                 } else {
@@ -58,10 +59,10 @@ impl<'a> Compiler<'a> {
             };
             Ok(())
         }
-        compile_expr(&mut self.s, &vd.value, &self.sym_map)
+        compile_expr(&mut self.s, ctx, &vd.value)
     }
 
-    fn compile_fn(&mut self, fn_: &Fn) -> std::io::Result::<()> {
+    fn compile_fn(&mut self, fn_: &Fn, ctx: &Box::<Ctx>) -> std::io::Result::<()> {
         write!(self.s, "function")?;
         let ret_ty = fn_.ret_ty.as_ref()
             .map(Type::to_il_str)
@@ -90,14 +91,14 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_print(&mut self, fc: &FnCall) -> std::io::Result::<()> {
-        fn get_type(lit: &Box::<Token>, sym_map: &SymMap) -> Option::<Type> {
-            if let Some(ref sym) = sym_map.get(lit.string) {
+    fn compile_print(&mut self, fc: &FnCall, ctx: &Box::<Ctx>) -> std::io::Result::<()> {
+        fn get_type(lit: &Box::<Token>, ctx: &Box::<Ctx>) -> Option::<Type> {
+            if let Some(ref sym) = ctx.sym_map().get(lit.string) {
                 let AstKind::VarDecl(ref vd) = &sym.kind else { todo!() };
                 match vd.value.deref() {
                     Expr::I64(..) => Some(Type::I64),
                     Expr::F64(..) => Some(Type::F64),
-                    Expr::Lit(lit) => get_type(lit, sym_map),
+                    Expr::Lit(lit) => get_type(lit, ctx),
                     _ => todo!()
                 }
             } else { None }
@@ -105,7 +106,7 @@ impl<'a> Compiler<'a> {
 
         for arg in fc.args.iter() {
             match arg.deref() {
-                Expr::Lit(lit) => if let Some(ty) = get_type(lit, self.sym_map) {
+                Expr::Lit(lit) => if let Some(ty) = get_type(lit, ctx) {
                     let ref string = lit.string;
                     match ty {
                         Type::I64 => writetln!(self.s, "call $print_i64(l %{string}, w 1)")?,
@@ -121,9 +122,9 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_fn_call(&mut self, fc: &FnCall) -> std::io::Result::<()> {
+    fn compile_fn_call(&mut self, fc: &FnCall, ctx: &Box::<Ctx>) -> std::io::Result::<()> {
         if fc.name_token.string.eq("print") {
-            return self.compile_print(fc)
+            return self.compile_print(fc, ctx)
         }
 
         writet!(self.s, "call ${name}(", name = fc.name_token.string)?;
@@ -142,9 +143,9 @@ impl<'a> Compiler<'a> {
 
     fn compile_ast(&mut self, ast: &Ast) -> std::io::Result::<()> {
         match &ast.kind {
-            AstKind::Fn(fn_)     => self.compile_fn(&fn_),
-            AstKind::VarDecl(vd) => self.compile_var_decl(&vd),
-            AstKind::FnCall(fc)  => self.compile_fn_call(&fc)
+            AstKind::Fn(fn_)     => self.compile_fn(&fn_, &ast.ctx),
+            AstKind::VarDecl(vd) => self.compile_var_decl(&vd, &ast.ctx),
+            AstKind::FnCall(fc)  => self.compile_fn_call(&fc, &ast.ctx)
         }
     }
 

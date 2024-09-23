@@ -1,4 +1,4 @@
-use crate::parser::SymMap;
+use crate::parser::{Ctx, SymMap};
 use crate::lexer::{Loc, Token, TokenKind};
 
 #[derive(Debug, Clone)]
@@ -62,6 +62,7 @@ pub enum AstKind<'a> {
 #[derive(Debug, Clone)]
 pub struct Ast<'a> {
     pub id: usize,
+    pub ctx: Box::<Ctx<'a>>,
     pub loc: Box::<Loc>,
     pub kind: AstKind<'a>,
     pub next: usize,
@@ -84,8 +85,8 @@ impl<'a> Asts<'a> {
     }
 
     #[inline(always)]
-    pub fn new_ast<'b>(&self, loc: Box::<Loc>, kind: AstKind<'b>) -> Ast<'b> {
-        Ast {id: self.id, next: self.id + 1, loc, kind}
+    pub fn new_ast<'b>(&self, ctx: Box::<Ctx<'b>>, loc: Box::<Loc>, kind: AstKind<'b>) -> Ast<'b> {
+        Ast {ctx, id: self.id, next: self.id + 1, loc, kind}
     }
 
     #[inline(always)]
@@ -99,8 +100,8 @@ impl<'a> Asts<'a> {
     }
 
     #[inline(always)]
-    pub fn append(&mut self, loc: Box::<Loc>, kind: AstKind<'a>) {
-        let ast = Ast {id: self.id, next: self.id + 1, loc, kind};
+    pub fn append(&mut self, ctx: Box::<Ctx<'a>>, loc: Box::<Loc>, kind: AstKind<'a>) {
+        let ast = Ast {ctx, id: self.id, next: self.id + 1, loc, kind};
         self.asts.push(Box::new(ast));
         self.id += 1;
     }

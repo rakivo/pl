@@ -1,5 +1,4 @@
-use std::env;
-use std::fs::read_to_string;
+use std::{env, fs::read_to_string};
 
 mod ast;
 mod lexer;
@@ -26,18 +25,12 @@ fn main() -> IoResultRef::<'static, ()> {
 
     lexer.lex();
 
-    // lexer.tokens.iter().for_each(|t| {
-    //     println!("{t}");
-    // });
-
     if lexer.tokens.is_empty() { return Ok(()) }
 
     let mut parser = Parser::new(&lexer.tokens);
-    let (asts, sym_map) = parser.parse();
+    let asts = parser.parse();
 
-    println!("{:#?}", asts.asts);
-
-    let mut compiler = Compiler::new(file_path, sym_map).unwrap();
+    let mut compiler = Compiler::new(file_path).unwrap();
     compiler.compile(asts).unwrap();
 
     Ok(())

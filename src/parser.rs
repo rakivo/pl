@@ -9,11 +9,49 @@ use std::collections::HashMap;
 
 pub type SymMap<'a> = HashMap::<&'a str, Box::<Ast<'a>>>;
 
+#[derive(Debug, Clone)]
+pub enum Ctx<'a> {
+    Fn(SymMap<'a>),
+    Global(SymMap<'a>),
+    FnCall(SymMap<'a>),
+}
+
+impl<'a> Ctx<'a> {
+    #[inline(always)]
+    pub fn sym_map(&self) -> &SymMap<'a> {
+        match self {
+            Ctx::Fn(sm) | Ctx::FnCall(sm) | Ctx::Global(sm) => sm
+        }
+    }
+
+    #[inline(always)]
+    pub fn sym_map_mut(&mut self) -> &mut SymMap<'a> {
+        match self {
+            Ctx::Fn(sm) | Ctx::FnCall(sm) | Ctx::Global(sm) => sm
+        }
+    }
+
+    #[inline(always)]
+    pub fn empty_fn() -> Ctx<'static> {
+        Ctx::Fn(SymMap::new())
+    }
+
+    #[inline(always)]
+    pub fn empty_fncall() -> Ctx<'static> {
+        Ctx::FnCall(SymMap::new())
+    }
+
+    #[inline(always)]
+    pub fn empty_global() -> Ctx<'static> {
+        Ctx::Global(SymMap::new())
+    }
+}
+
 pub struct Parser<'a, 'b> {
     idx: usize,
     eof: bool,
     tokens: &'b Tokens<'a>,
-    sym_map: SymMap<'a>
+    ctx: Box::<Ctx<'a>>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -23,7 +61,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             tokens,
             idx: 0,
             eof: false,
-            sym_map: HashMap::new()
+            ctx: Box::new(Ctx::Global(HashMap::new()))
         }
     }
 
@@ -81,7 +119,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.advance();
         self.advance();
 
-        let mut expr_tokens = Vec::with_capacity(self.tokens.len() - self.idx);
+        let mut expr_tokens = Vec::new();
         while self.tokens[self.idx].kind != TokenKind::Semicolon && !self.eof {
             expr_tokens.push(&self.tokens[self.idx]);
             self.advance();
@@ -95,10 +133,10 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        let expr = ExprParser::new(expr_tokens, &self.sym_map).parse();
+        let expr = ExprParser::new(expr_tokens, self.ctx.sym_map()).parse();
         let value = match ty {
-            Type::I64 => Box::new(Expr::I64(expr.eval_int(&self.sym_map))),
-            Type::F64 => Box::new(Expr::F64(expr.eval_flt(&self.sym_map))),
+            Type::I64 => Box::new(Expr::I64(expr.eval_int(self.ctx.sym_map()))),
+            Type::F64 => Box::new(Expr::F64(expr.eval_flt(self.ctx.sym_map()))),
         };
 
         VarDecl {
@@ -121,22 +159,22 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        let mut args = Vec::with_capacity(self.tokens.len() - self.idx);
+        let mut args = Vec::new();
         while self.idx < self.tokens.len() && !self.eof {
             let ref t = self.tokens[self.idx];
             if t.kind == TokenKind::RParen { break }
 
-            let mut expr_tokens = Vec::with_capacity(self.tokens.len() - self.idx);
+            let mut expr_tokens = Vec::new();
             while !matches!(self.tokens[self.idx].kind, TokenKind::Comma | TokenKind::RParen) && !self.eof {
                 expr_tokens.push(&self.tokens[self.idx]);
                 self.advance();
             }
 
-            let expr = ExprParser::new(expr_tokens, &self.sym_map).parse();
+            let expr = ExprParser::new(expr_tokens, self.ctx.sym_map()).parse();
             let value = match t.kind {
                 TokenKind::RParen => break,
-                TokenKind::Int => Box::new(Expr::I64(expr.eval_int(&self.sym_map))),
-                TokenKind::Flt => Box::new(Expr::F64(expr.eval_flt(&self.sym_map))),
+                TokenKind::Int => Box::new(Expr::I64(expr.eval_int(self.ctx.sym_map()))),
+                TokenKind::Flt => Box::new(Expr::F64(expr.eval_flt(self.ctx.sym_map()))),
                 TokenKind::Lit => Box::new(Expr::Lit(t.to_owned())),
                 _ => panic!("{loc} expected int or float bruv, but got: {got}",
                             loc = t.loc, got = t.string)
@@ -275,6 +313,21 @@ impl<'a, 'b> Parser<'a, 'b> {
         Fn { ret_ty, body: body.asts, args, name_token }
     }
 
+    #[inline(always)]
+    fn append(&self, asts: &mut Asts<'a>, loc: Box::<Loc>, kind: AstKind<'a>) {
+        asts.append(self.ctx.to_owned(), loc, kind);
+    }
+
+    #[inline(always)]
+    fn new_ast(&self, asts: &mut Asts<'a>, loc: Box::<Loc>, kind: AstKind<'a>) -> Ast<'a> {
+        asts.new_ast(self.ctx.to_owned(), loc, kind)
+    }
+
+    #[inline(always)]
+    fn set_ctx(&mut self, ctx: Ctx<'a>) {
+        self.ctx = Box::new(ctx)
+    }
+
     fn parse_line(&mut self, expect_matching: bool, asts: &mut Asts<'a>) -> bool {
         while self.idx < self.tokens.len() && !self.eof {
             if self.eof { break }
@@ -288,18 +341,19 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 TokenKind::Fn => {
                     let fn_ = Box::new(self.parse_fn());
-                    asts.append(token.loc.to_owned(), AstKind::Fn(fn_));
+                    self.set_ctx(Ctx::empty_fn());
+                    self.append(asts, token.loc.to_owned(), AstKind::Fn(fn_));
                 }
                 TokenKind::Lit => {
                     let fcall = Box::new(self.parse_fn_call());
-                    asts.append(token.loc.to_owned(), AstKind::FnCall(fcall));
+                    self.append(asts, token.loc.to_owned(), AstKind::FnCall(fcall));
                 }
                 TokenKind::Type => {
                     let decl = Box::new(self.parse_decl());
                     let name = decl.name_token.string;
-                    let ast = asts.new_ast(token.loc.to_owned(), AstKind::VarDecl(decl));
+                    let ast = self.new_ast(asts, token.loc.to_owned(), AstKind::VarDecl(decl));
                     let ptr = Box::new(ast);
-                    self.sym_map.insert(name, ptr.to_owned());
+                    self.ctx.sym_map_mut().insert(name, ptr.to_owned());
                     asts.append_ast(ptr);
                     asts.id += 1;
                 }
@@ -309,12 +363,12 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     #[inline(always)]
-    pub fn parse(&mut self) -> (Asts, &'a SymMap) {
+    pub fn parse(&mut self) -> Asts {
         let mut asts = Asts::new();
         while self.idx < self.tokens.len() && !self.eof {
             if self.eof { break }
             self.parse_line(false, &mut asts);
             self.advance();
-        } (asts, &self.sym_map)
+        } asts
     }
 }
