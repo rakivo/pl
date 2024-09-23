@@ -1,4 +1,5 @@
 qbe-1.2
+*.ssa
 build
 target
 Cargo.toml

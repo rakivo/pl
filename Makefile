@@ -4,6 +4,7 @@ EVAL_DIR := eval
 SRC_FILES := $(wildcard $(SRC_DIR)/*.rs)
 SRC_FILES += $(wildcard $(SRC_DIR)/$(EVAL_DIR)/*.rs)
 ROOT_FILE := $(SRC_DIR)/main.rs
+OBJ_FILES := $(BUILD_DIR)/out.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/print_i64.o $(BUILD_DIR)/print_f64.o $(BUILD_DIR)/args.o
 
 RUSTFLAGS := --edition=2021 -g # -Z threads=10
 
@@ -12,13 +13,13 @@ ifeq ($(RELEASE), 1)
 endif
 
 $(BUILD_DIR)/compiler: $(ROOT_FILE) $(SRC_FILES)
-	rustc -o $@ $(RUSTFLAGS) $<
+	/usr/bin/rustc -o $@ $(RUSTFLAGS) $<
 
-$(BUILD_DIR)/out: $(BUILD_DIR)/out.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/print_i64.o $(BUILD_DIR)/print_f64.o $(BUILD_DIR)/args.o
-	ld -o $@ $^
+$(BUILD_DIR)/out: $(BUILD_DIR)/out.s $(OBJ_FILES)
+	/usr/bin/ld -o $@ $(OBJ_FILES)
 
 $(BUILD_DIR)/%.o: %.s
-	as -o $@ $<
+	/usr/bin/as -o $@ $<
 
 $(BUILD_DIR)/%.s: %.ssa
-	./qbe-1.2/qbe $< > $@
+	/usr/bin/qbe $< > $@
