@@ -1,34 +1,29 @@
 use crate::{
     expr_parser::ExprParser,
-    lexer::{Loc, Token, TokenKind, Tokens, Tokens2D},
-    ast::{Fn, Asts, Type, FnArg, AstKind, FnCall, Value, VarDecl},
+    lexer::{Loc, Token, TokenKind, Tokens},
+    ast::{Ast, AstKind, Asts, Expr, Fn, FnArg, FnCall, Type, VarDecl},
 };
 
 use std::process::exit;
 use std::collections::HashMap;
 
-pub type VarMap<'a> = HashMap::<&'a str, Box::<VarDecl<'a>>>;
+pub type SymMap<'a> = HashMap::<&'a str, Box::<Ast<'a>>>;
 
 pub struct Parser<'a, 'b> {
-    line_cur: usize,
     idx: usize,
     eof: bool,
-    // current line
-    cl: &'b Tokens<'a>,
-    tokens: &'b Tokens2D<'a>,
-    var_map: VarMap<'a>
+    tokens: &'b Tokens<'a>,
+    sym_map: SymMap<'a>
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
     #[inline]
-    pub fn new(tokens: &'b Tokens2D<'a>) -> Self {
+    pub fn new(tokens: &'b Tokens<'a>) -> Self {
         Self {
             tokens,
-            cl: &tokens[0],
             idx: 0,
-            line_cur: 0,
             eof: false,
-            var_map: HashMap::new()
+            sym_map: HashMap::new()
         }
     }
 
@@ -38,9 +33,9 @@ impl<'a, 'b> Parser<'a, 'b> {
         F: FnOnce(&Token) -> bool,
         E: FnOnce(&'a str, &Box::<Loc>)
     {
-        if let Some(t) = self.cl.get(self.idx) {
+        if let Some(t) = self.tokens.get(self.idx) {
             if cond(t) { t } else { err(t.string, &t.loc); exit(1) }
-        } else { err("<eof>", &self.cl[self.idx].loc); exit(1) }
+        } else { err("<eof>", &self.tokens[self.idx].loc); exit(1) }
     }
 
     #[inline]
@@ -49,31 +44,33 @@ impl<'a, 'b> Parser<'a, 'b> {
         F: FnOnce(&Token) -> bool,
         E: FnOnce(&'a str, &Box::<Loc>)
     {
-        if let Some(t) = self.cl.get(self.idx) {
+        if let Some(t) = self.tokens.get(self.idx) {
             if cond(t) {
-                self.cl[self.idx].to_owned()
+                self.tokens[self.idx].to_owned()
             } else { err(t.string, &t.loc); exit(1) }
-        } else { err("<eof>", &self.cl[self.idx].loc); exit(1) }
+        } else { err("<eof>", &self.tokens[self.idx].loc); exit(1) }
     }
 
     #[inline]
     fn advance(&mut self) {
         self.idx += 1;
-        if self.idx >= self.cl.len() {
+        if self.idx >= self.tokens.len() {
             self.idx = 0;
-            self.line_cur += 1;
-            if self.line_cur >= self.tokens.len() {
-                self.eof = true;
-            } else {
-                self.cl = &self.tokens[self.line_cur];
-            }
+            self.eof = true;
         }
     }
 
     fn parse_decl(&mut self) -> VarDecl<'a> {
-        let ref ty_token = self.cl[self.idx];
+        let ref ty_token = self.tokens[self.idx];
 
         self.advance();
+
+        let ty = Type::try_from_token(&ty_token).unwrap();
+        if self.tokens[self.idx].kind == TokenKind::Asterisk {
+            todo!();
+            // ty = ty.to_ptr();
+            // self.advance();
+        }
 
         let name_token = self.type_check_token_owned(|t| {
             matches!(t.kind, TokenKind::Lit)
@@ -84,13 +81,13 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.advance();
         self.advance();
 
-        let mut expr_tokens = Vec::with_capacity(self.cl.len() - self.idx);
-        while self.cl[self.idx].kind != TokenKind::Semicolon {
-            expr_tokens.push(&self.cl[self.idx]);
+        let mut expr_tokens = Vec::with_capacity(self.tokens.len() - self.idx);
+        while self.tokens[self.idx].kind != TokenKind::Semicolon && !self.eof {
+            expr_tokens.push(&self.tokens[self.idx]);
             self.advance();
         }
 
-        let _ = self.type_check_token(|t| {
+        self.type_check_token(|t| {
             matches!(t.kind, TokenKind::Semicolon)
         }, |string, loc| {
             panic!("{loc} error: expected semicolon after decl, but got: {string}")
@@ -98,25 +95,24 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        match ty_token.kind {
-            TokenKind::IntType => VarDecl {
-                name_token,
-                value: Value::Int(ExprParser::new(expr_tokens, &self.var_map).parse().eval_int()),
-            },
-            TokenKind::FltType => VarDecl {
-                name_token,
-                value: Value::Flt(ExprParser::new(expr_tokens, &self.var_map).parse().eval_flt()),
-            },
-            _ => unreachable!()
+        let expr = ExprParser::new(expr_tokens, &self.sym_map).parse();
+        let value = match ty {
+            Type::I64 => Box::new(Expr::I64(expr.eval_int(&self.sym_map))),
+            Type::F64 => Box::new(Expr::F64(expr.eval_flt(&self.sym_map))),
+        };
+
+        VarDecl {
+            name_token,
+            value,
         }
     }
 
     fn parse_fn_call(&mut self) -> FnCall<'a> {
-        let name_token = self.cl[self.idx].to_owned();
+        let name_token = self.tokens[self.idx].to_owned();
         self.advance();
 
         if !matches! {
-            self.cl.get(self.idx),
+            self.tokens.get(self.idx),
             Some(t) if t.kind == TokenKind::LParen
         } {
             panic!("{loc} expected lparen bruv",
@@ -125,41 +121,44 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        let mut args = Vec::with_capacity(self.cl.len() - self.idx);
-        while self.idx < self.cl.len() {
-            let ref t = self.cl[self.idx];
+        let mut args = Vec::with_capacity(self.tokens.len() - self.idx);
+        while self.idx < self.tokens.len() && !self.eof {
+            let ref t = self.tokens[self.idx];
+            if t.kind == TokenKind::RParen { break }
+
+            let mut expr_tokens = Vec::with_capacity(self.tokens.len() - self.idx);
+            while !matches!(self.tokens[self.idx].kind, TokenKind::Comma | TokenKind::RParen) && !self.eof {
+                expr_tokens.push(&self.tokens[self.idx]);
+                self.advance();
+            }
+
+            let expr = ExprParser::new(expr_tokens, &self.sym_map).parse();
             let value = match t.kind {
                 TokenKind::RParen => break,
-                TokenKind::Int => Value::Int(ExprParser::new(vec![t], &self.var_map).parse().eval_int()),
-                TokenKind::Flt => Value::Flt(ExprParser::new(vec![t], &self.var_map).parse().eval_flt()),
-                TokenKind::Lit => if let Some(lit) = self.var_map.get(t.string) {
-                    lit.value.to_owned()
-                } else {
-                    panic!("{loc} undefined symbol: {string}",
-                            loc = t.loc, string = t.string)
-                }
+                TokenKind::Int => Box::new(Expr::I64(expr.eval_int(&self.sym_map))),
+                TokenKind::Flt => Box::new(Expr::F64(expr.eval_flt(&self.sym_map))),
+                TokenKind::Lit => Box::new(Expr::Lit(t.to_owned())),
                 _ => panic!("{loc} expected int or float bruv, but got: {got}",
                             loc = t.loc, got = t.string)
             };
 
-            self.idx += 1;
             if !matches! {
-                self.cl.get(self.idx),
+                self.tokens.get(self.idx),
                 Some(t) if t.kind == TokenKind::RParen
             } {
-                _ = self.type_check_token(|t| {
+                self.type_check_token(|t| {
                     t.kind == TokenKind::Comma
                 }, |string, loc| {
                     panic!("{loc} expected comma after an argument, but got: {string}")
                 });
-                self.idx += 1;
+                self.advance();
             }
 
             args.push(value);
         }
 
         if !matches! {
-            self.cl.get(self.idx),
+            self.tokens.get(self.idx),
             Some(t) if t.kind == TokenKind::RParen
         } {
             panic!("{loc} rparen was not met bruv", loc = name_token.loc);
@@ -181,7 +180,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.advance();
 
         if !matches! {
-            self.cl.get(self.idx),
+            self.tokens.get(self.idx),
             Some(t) if t.kind == TokenKind::LParen
         } {
             panic!("{loc} expected lparen bruv",
@@ -190,15 +189,15 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        let mut args = Vec::with_capacity(self.cl.len() - self.idx);
-        while self.idx < self.cl.len() {
-            let ref t = self.cl[self.idx];
-            let ty = match t.kind {
-                TokenKind::RParen  => break,
-                TokenKind::IntType => Type::I64,
-                TokenKind::FltType => Type::F64,
-                _ => panic!("{loc} expected type but got: {string}",
-                            loc = t.loc, string = t.string)
+        let mut args = Vec::new();
+        while self.idx < self.tokens.len() && !self.eof {
+            let ref t = self.tokens[self.idx];
+
+            if t.kind == TokenKind::RParen { break }
+
+            let Ok(ty) = Type::try_from_token(t) else {
+                panic!("{loc} expected type but got: {string}",
+                       loc = t.loc, string = t.string)
             };
 
             self.advance();
@@ -214,7 +213,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
 
         if !matches! {
-            self.cl.get(self.idx),
+            self.tokens.get(self.idx),
             Some(t) if t.kind == TokenKind::RParen
         } {
             panic!("{loc} rparen was not met bruv", loc = name_token.loc);
@@ -222,10 +221,10 @@ impl<'a, 'b> Parser<'a, 'b> {
 
         self.advance();
 
-        let ret_ty = if self.cl[self.idx].kind == TokenKind::LCurly {
+        let ret_ty = if self.tokens[self.idx].kind == TokenKind::LCurly {
             None
         } else {
-            let _ = self.type_check_token_owned(|t| {
+            self.type_check_token_owned(|t| {
                 matches!(t.kind, TokenKind::Minus)
             }, |string, loc| {
                 panic!("{loc} error: Expected arrow after rparen, but got: {string}")
@@ -233,7 +232,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
             self.advance();
 
-            let _ = self.type_check_token_owned(|t| {
+            self.type_check_token_owned(|t| {
                 matches!(t.kind, TokenKind::RAngleBracket)
             }, |string, loc| {
                 panic!("{loc} error: Expected arrow after rparen, but got: {string}")
@@ -241,58 +240,45 @@ impl<'a, 'b> Parser<'a, 'b> {
 
             self.advance();
 
-            let ty = match self.cl[self.idx].kind {
-                TokenKind::IntType => Type::I64,
-                TokenKind::FltType => Type::F64,
-                _ => panic!("{loc} error: Expected arrow after rparen, but got: {string}",
-                            loc = self.cl[self.idx].loc,
-                            string = self.cl[self.idx].string)
+            let Ok(ty) = Type::try_from_token(&self.tokens[self.idx]) else {
+                panic!("{loc} error: Expected arrow after rparen, but got: {string}",
+                    loc = self.tokens[self.idx].loc,
+                    string = self.tokens[self.idx].string)
             };
 
             self.advance();
             Some(ty)
         };
 
-        while self.cl.is_empty() {
-            self.advance();
-        }
-
         let ref lcurly_token = 'lcurly: loop {
-            if self.cl.is_empty() {
+            if self.tokens.is_empty() {
                 panic!("{loc} expected `{{` bruv", loc = name_token.loc);
             }
 
-            let ref t = self.cl[self.idx];
+            let ref t = self.tokens[self.idx];
             self.advance();
             if t.kind == TokenKind::LCurly {
                 break 'lcurly t;
             }
         };
 
-        while self.cl.is_empty() {
-            self.advance();
-        }
-
         let mut body = Asts::new();
         while !self.parse_line(true, &mut body) {
             self.advance();
-            if self.line_cur == self.tokens.len() {
+            if self.eof {
                 panic!("{loc} eww no rcurly matched bruv", loc = lcurly_token.loc)
             }
-            self.cl = &self.tokens[self.line_cur];
         }
 
-        println!("TOKENS: {:?}", &self.cl[self.idx]);
         self.advance();
 
         Fn { ret_ty, body: body.asts, args, name_token }
     }
 
-    fn parse_line(&mut self, expect_matching: bool, asts_buf: &mut Asts<'a>) -> bool {
-        while self.idx < self.cl.len() {
+    fn parse_line(&mut self, expect_matching: bool, asts: &mut Asts<'a>) -> bool {
+        while self.idx < self.tokens.len() && !self.eof {
             if self.eof { break }
-            let ref token = self.cl[self.idx];
-            println!("TOKEN: {token:?}");
+            let ref token = self.tokens[self.idx];
             match token.kind {
                 TokenKind::RCurly |
                 TokenKind::RParen => if expect_matching {
@@ -302,16 +288,20 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 TokenKind::Fn => {
                     let fn_ = Box::new(self.parse_fn());
-                    asts_buf.append(token.loc.to_owned(), AstKind::Fn(fn_));
+                    asts.append(token.loc.to_owned(), AstKind::Fn(fn_));
                 }
                 TokenKind::Lit => {
                     let fcall = Box::new(self.parse_fn_call());
-                    asts_buf.append(token.loc.to_owned(), AstKind::FnCall(fcall));
+                    asts.append(token.loc.to_owned(), AstKind::FnCall(fcall));
                 }
-                TokenKind::IntType | TokenKind::FltType => {
+                TokenKind::Type => {
                     let decl = Box::new(self.parse_decl());
-                    self.var_map.insert(decl.name_token.string, decl.to_owned());
-                    asts_buf.append(token.loc.to_owned(), AstKind::VarDecl(decl));
+                    let name = decl.name_token.string;
+                    let ast = asts.new_ast(token.loc.to_owned(), AstKind::VarDecl(decl));
+                    let ptr = Box::new(ast);
+                    self.sym_map.insert(name, ptr.to_owned());
+                    asts.append_ast(ptr);
+                    asts.id += 1;
                 }
                 _ => self.idx += 1
             }
@@ -319,13 +309,12 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     #[inline(always)]
-    pub fn parse(&mut self) -> Asts {
+    pub fn parse(&mut self) -> (Asts, &'a SymMap) {
         let mut asts = Asts::new();
-        while self.line_cur < self.tokens.len() {
+        while self.idx < self.tokens.len() && !self.eof {
             if self.eof { break }
-            self.cl = &self.tokens[self.line_cur];
             self.parse_line(false, &mut asts);
             self.advance();
-        } asts
+        } (asts, &self.sym_map)
     }
 }

@@ -14,7 +14,7 @@ endif
 $(BUILD_DIR)/compiler: $(ROOT_FILE) $(SRC_FILES)
 	rustc -o $@ $(RUSTFLAGS) $<
 
-$(BUILD_DIR)/out: $(BUILD_DIR)/out.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/print_i64.o $(BUILD_DIR)/print_f64.o
+$(BUILD_DIR)/out: $(BUILD_DIR)/out.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/print_i64.o $(BUILD_DIR)/print_f64.o $(BUILD_DIR)/args.o
 	ld -o $@ $^
 
 $(BUILD_DIR)/%.o: %.s

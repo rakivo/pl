@@ -26,14 +26,18 @@ fn main() -> IoResultRef::<'static, ()> {
 
     lexer.lex();
 
+    // lexer.tokens.iter().for_each(|t| {
+    //     println!("{t}");
+    // });
+
     if lexer.tokens.is_empty() { return Ok(()) }
 
     let mut parser = Parser::new(&lexer.tokens);
-    let asts = parser.parse();
+    let (asts, sym_map) = parser.parse();
 
-    // println!("{:#?}", asts.asts);
+    println!("{:#?}", asts.asts);
 
-    let mut compiler = Compiler::new(file_path).unwrap();
+    let mut compiler = Compiler::new(file_path, sym_map).unwrap();
     compiler.compile(asts).unwrap();
 
     Ok(())

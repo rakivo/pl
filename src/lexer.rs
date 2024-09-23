@@ -4,7 +4,6 @@ use std::fmt::{Debug, Display};
 use std::iter::{Peekable, Enumerate};
 
 pub type Tokens<'a> = Vec::<Box::<Token<'a>>>;
-pub type Tokens2D<'a> = Vec::<Tokens<'a>>;
 pub type TokensRefs<'a> = Vec::<&'a Box::<Token<'a>>>;
 pub type IoResultRef<'a, T> = Result<T, &'a std::io::Error>;
 
@@ -65,8 +64,7 @@ pub enum TokenKind {
     Flt,
     Lit,
     Comma,
-    FltType,
-    IntType,
+    Type,
     Plus,
     Asterisk,
     Minus,
@@ -102,7 +100,7 @@ pub struct Lexer<'a> {
     row: usize,
     lines: LinesIterator<'a>,
     file_path: Box::<FilePath>,
-    pub tokens: Tokens2D<'a>
+    pub tokens: Tokens<'a>
 }
 
 impl<'a> Lexer<'a> {
@@ -120,7 +118,7 @@ impl<'a> Lexer<'a> {
         Ok(lexer)
     }
 
-    const SEPARATORS: &'static [char] = &[';', '=', '*', '/', '-', '+', '(', ')', ','];
+    const SEPARATORS: &'static [char] = &[';', '=', '*', '/', '-', '+', '(', ')', '{', '}', ','];
 
     fn split_whitespace_preserve_indices(input: &str) -> Vec::<(usize, &str)> {
         let (s, e, mut ret) = input.char_indices().fold((0, 0, Vec::with_capacity(input.len() / 2)),
@@ -171,8 +169,8 @@ impl<'a> Lexer<'a> {
                 panic!("{err_loc} error: failed to parse number: {string}")
             }
             'a'..='z' | 'A'..='Z' => match string {
-                "i64" => TokenKind::IntType,
-                "f64" => TokenKind::FltType,
+                "i64" => TokenKind::Type,
+                "f64" => TokenKind::Type,
                 "fn"  => TokenKind::Fn,
                 _ => TokenKind::Lit,
             }
@@ -193,8 +191,8 @@ impl<'a> Lexer<'a> {
                 string,
                 loc: Box::new(loc),
             }
-        }).map(Box::new).collect();
-        self.tokens.push(tokens);
+        }).map(Box::new).collect::<Tokens>();
+        self.tokens.extend(tokens);
     }
 
     #[inline]

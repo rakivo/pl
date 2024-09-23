@@ -1,20 +1,20 @@
-use super::ast::{Expr, Value};
-use crate::{Token, TokenKind, TokensRefs, VarMap};
+use super::ast::Expr;
+use crate::{ast::AstKind, SymMap, Token, TokenKind, TokensRefs};
 
 pub struct ExprParser<'a> {
     curr_idx: usize,
     curr_token: Box::<Token<'a>>,
-    var_map: &'a VarMap<'a>,
+    sym_map: &'a SymMap<'a>,
     tokens: TokensRefs<'a>,
 }
 
 impl<'a> ExprParser<'a> {
     #[inline]
-    pub fn new(tokens: TokensRefs<'a>, var_map: &'a VarMap) -> Self {
+    pub fn new(tokens: TokensRefs<'a>, sym_map: &'a SymMap<'a>) -> Self {
         ExprParser {
             curr_token: tokens[0].to_owned(),
             tokens,
-            var_map,
+            sym_map,
             curr_idx: 1,
         }
     }
@@ -43,27 +43,27 @@ impl<'a> ExprParser<'a> {
     }
 
     // start ::= expr
-    pub fn parse(&mut self) -> Expr {
+    pub fn parse(&mut self) -> Box::<Expr<'a>> {
         let program_ast = self.parse_expr();
         assert!(self.tokens.len() == self.curr_idx);
         program_ast
     }
 
     // expr ::= term (+ expr | - expr | epsilon)
-    fn parse_expr(&mut self) -> Expr {
+    fn parse_expr(&mut self) -> Box::<Expr<'a>> {
         let term_ast = self.parse_term();
 
         match self.curr_token.kind {
             TokenKind::Plus => {
                 self.accept_it();
                 let expr_ast = self.parse_expr();
-                Expr::Add(Box::new(term_ast), Box::new(expr_ast))
+                Box::new(Expr::Add(term_ast, expr_ast))
             }
 
             TokenKind::Minus => {
                 self.accept_it();
                 let expr_ast = self.parse_expr();
-                Expr::Sub(Box::new(term_ast), Box::new(expr_ast))
+                Box::new(Expr::Sub(term_ast, expr_ast))
             }
 
             _ => term_ast,
@@ -71,20 +71,20 @@ impl<'a> ExprParser<'a> {
     }
 
     // term ::= factor (* term | / term | epsilon)
-    fn parse_term(&mut self) -> Expr {
+    fn parse_term(&mut self) -> Box::<Expr<'a>> {
         let factor_ast = self.parse_factor();
 
         match self.curr_token.kind {
             TokenKind::Asterisk => {
                 self.accept_it();
                 let term_ast = self.parse_term();
-                Expr::Mul(Box::new(factor_ast), Box::new(term_ast))
+                Box::new(Expr::Mul(factor_ast, term_ast))
             }
 
             TokenKind::Slash => {
                 self.accept_it();
                 let term_ast = self.parse_term();
-                Expr::Div(Box::new(factor_ast), Box::new(term_ast))
+                Box::new(Expr::Div(factor_ast, term_ast))
             }
 
             _ => factor_ast,
@@ -92,7 +92,7 @@ impl<'a> ExprParser<'a> {
     }
 
     // factor ::= ( expr ) | integer
-    fn parse_factor(&mut self) -> Expr {
+    fn parse_factor(&mut self) -> Box::<Expr<'a>> {
         match self.curr_token.kind {
             TokenKind::LParen => {
                 self.accept_it();
@@ -101,23 +101,24 @@ impl<'a> ExprParser<'a> {
                 expr_ast
             }
 
-            TokenKind::Int => Expr::Int(self.get_int()),
-            TokenKind::Flt => Expr::Flt(self.get_flt()),
+            TokenKind::Int => Box::new(Expr::I64(self.get_int())),
+            TokenKind::Flt => Box::new(Expr::F64(self.get_flt())),
 
-            TokenKind::Lit => if let Some(vd) = self.var_map.get(self.curr_token.string) {
+            TokenKind::Lit => if let Some(ref sym) = self.sym_map.get(self.curr_token.string) {
                 self.accept_it();
-                match vd.value {
-                    Value::Int(ival) => Expr::Int(ival),
-                    Value::Flt(fval) => Expr::Flt(fval)
+                match &sym.kind {
+                    AstKind::VarDecl(vd) => vd.value.to_owned(),
+                    _ => todo!()
                 }
             } else {
-                panic!("{loc} error: undefined symbol: {name}",
+                panic!("{loc} error: undefined symbol: {string}",
                        loc = self.curr_token.loc,
-                       name = self.curr_token.string);
+                       string = self.curr_token.string)
             }
 
             _ => panic! {
-                "`parse_factor`: unexpected token of kind {:?}.",
+                "`parse_factor`: unexpected token: `{}` of kind {:?}.",
+                self.curr_token.string,
                 self.curr_token.kind
             }
         }
